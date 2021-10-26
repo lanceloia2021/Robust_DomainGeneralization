@@ -10,7 +10,7 @@ def parser():
     _parser.add_argument('--name', default=None, type=str, help='name of run')
     _parser.add_argument('--seed', default=0, type=int, help='random seed')
     _parser.add_argument('--batch-size', default=128, type=int, help='batch size')
-    _parser.add_argument('--epoch', default=100, type=int,
+    _parser.add_argument('--epoch', default=60, type=int,
                         help='total epochs to run')
     _parser.add_argument('--no-augment', dest='augment', action='store_false',
                         help='use standard augmentation (default: True)')

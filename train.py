@@ -10,7 +10,7 @@ from itertools import cycle
 
 from parser import parser
 from dataloader import random_split_dataloader, unlabeled_dataloader
-from utils import progress_bar, mixup_data, print2
+from utils import progress_bar, mixup_data, print2, set_randseed
 import csv
 import os
 
@@ -28,9 +28,25 @@ from torch.autograd import Variable
 from copy import deepcopy
 
 
+def supervisedtrainer():
+    st = SupervisedTrainer(model=net, optimizer=optimizer,
+                                trainloader=labeledloader, valloader=valloader, testloader=testloader,
+                                cuda=use_cuda, epoch=args.epoch, lr=args.lr, n_classes=n_classes,
+                                ckptfilename=checkpoint_filename, logname=logname)
+    return st
+
+
+def semisupervisedtrainer():
+    sst = SemiSupervisedTrainer(model=net, optimizer=optimizer,
+                                labeledloader=labeledloader, unlabeledloader=unlabeledloader, valloader=valloader, testloader=testloader,
+                                cuda=use_cuda, epoch=args.epoch, lr=args.lr, n_classes=n_classes,
+                                ckptfilename=checkpoint_filename, logname=logname)
+    return sst
+
+
 # 原代码移动到parser.py中
 args = parser()
-os.environ['CUDA_VISIBLE_DEVICES'] = "0,1,2,3"
+# os.environ['CUDA_VISIBLE_DEVICES'] = args.cuda
 domains = ['photo', 'art_painting', 'cartoon', 'sketch']
 n_classes = 7
 use_cuda = torch.cuda.is_available()
@@ -41,8 +57,7 @@ if args.name is None:
     args.name = domains[args.targetid]
 
 if args.seed != 0:
-    torch.manual_seed(args.seed)
-
+    set_randseed(args.seed)
 
 assert args.labeledid is not None
 assert args.targetid is not None
@@ -57,16 +72,16 @@ print('Labeled:', labeled_domain, 'Unlabeled:', unlabeled_domain, 'Target:', tar
 
 labeledloader, valloader, testloader = random_split_dataloader(
         data_root='/home/wrq/data/data/PACS/kfold/', source_domain=labeled_domain, target_domain=target_domain,
-        batch_size=args.batch_size, num_workers=4, get_domain_label=False)
+        batch_size=args.batch_size, num_workers=4, get_domain_label=True)
 
 if len(unlabeled_domain) > 0:
     unlabeledloader = unlabeled_dataloader(
         data_root='/home/wrq/data/data/PACS/kfold/', unlabeled_domain=unlabeled_domain,
-        batch_size=args.batch_size, num_workers=4)
+        batch_size=args.batch_size, num_workers=4, get_domain_label=True)
     trainloader = zip(cycle(labeledloader), unlabeledloader)
 
 
-net = models.__dict__[args.model]()
+net = models.__dict__[args.model](num_classes=7, num_domains=3)
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9,
                       weight_decay=args.decay)
 
@@ -103,18 +118,13 @@ logname = ('results/log_' + net.__class__.__name__ + '_' + args.name + '_'
            + str(args.seed) + '.csv')
 
 
-trainer = SupervisedTrainer(model=net, optimizer=optimizer,
-                            trainloader=labeledloader, valloader=valloader, testloader=testloader,
-                            cuda=use_cuda, epoch=args.epoch, lr=args.lr, n_classes=n_classes,
-                            ckptfilename=checkpoint_filename, logname=logname)
-
-# trainer = SemiSupervisedTrainer(model=net, optimizer=optimizer,
-#                             labeledloader=labeledloader, unlabeledloader=unlabeledloader, valloader=valloader, testloader=testloader,
-#                             cuda=use_cuda, epoch=args.epoch, lr=args.lr, n_classes=n_classes,
-#                             ckptfilename=checkpoint_filename, logname=logname)
+trainer = supervisedtrainer()
+# trainer = semisupervisedtrainer()
 
 with open(logname, 'a') as logfile:
     logwriter = csv.writer(logfile, delimiter=',')
     logwriter.writerow(target_domain)
 
 trainer.train(start_epoch)
+
+

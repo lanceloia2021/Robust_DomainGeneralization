@@ -1,13 +1,3 @@
-from .vgg import *
-from .lenet import *
-from .resnet import *
-from .resnext import *
-from .densenet import *
-from .googlenet import *
-from .mobilenet import *
-# from .densenet_efficient_multi_gpu import DenseNet190
-from .densenet3 import DenseNet190
-from .alexnet import AlexNet
-from .resnet_dg import *
-from .resnet_pseudo import *
-from .resnet_contrastive import *
+from .alexnet import DGalexnet
+from .resnet import DGresnet
+
