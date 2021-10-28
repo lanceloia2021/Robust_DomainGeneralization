@@ -1,0 +1,229 @@
+'''
+全监督DG
+'''
+
+#!/usr/bin/env python3 -u
+# Copyright (c) 2017-present, Facebook, Inc.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the LICENSE file in
+# the root directory of this source tree.
+from __future__ import print_function
+
+from parser import parser
+from dataloader import random_split_dataloader
+from utils import progress_bar, mixup_data, mixup_criterion
+import csv
+import os
+
+import numpy as np
+import torch
+import models
+
+import torch.backends.cudnn as cudnn
+import torch.nn as nn
+import torch.optim as optim
+
+from torch.autograd import Variable
+from copy import deepcopy
+
+
+# 原代码移动到parser.py中
+args = parser()
+
+os.environ['CUDA_VISIBLE_DEVICES'] = "0,1,2,3"
+
+domains = ['photo', 'art_painting', 'cartoon', 'sketch']
+
+use_cuda = torch.cuda.is_available()
+
+best_acc = 0.  # best test accuracy
+best_val_acc = 0.
+start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+
+if args.name is None:
+    args.name = domains[args.targetid]
+
+if args.seed != 0:
+    torch.manual_seed(args.seed)
+
+source_domain = deepcopy(domains)
+target_domain = [source_domain.pop(args.targetid)]
+
+trainloader, valloader, testloader = random_split_dataloader(
+        data='PACS', data_root='/home/wrq/data/data/PACS/kfold/', source_domain=source_domain, target_domain=target_domain,
+        batch_size=args.batch_size, get_domain_label=False, get_cluster=False, num_workers=4,
+        color_jitter=True, min_scale=0.8)
+
+net = models.__dict__[args.model]()
+optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9,
+                      weight_decay=args.decay)
+
+if use_cuda:
+    net.cuda()
+    net = torch.nn.DataParallel(net)
+    cudnn.benchmark = True
+    print('Using CUDA..')
+
+checkpoint_filename = './checkpoint/' + args.name + '_' + str(args.seed) + '.ckpt'
+
+
+# Model
+if args.resume:
+    # Load checkpoint.
+    assert os.path.exists(checkpoint_filename)
+    print('==> Resuming from checkpoint..')
+    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
+
+    state = torch.load(checkpoint_filename, map_location=torch.device('cpu'))
+    net.load_state_dict(state['net_state_dict'])
+    optimizer.load_state_dict(state['optimizer_state_dict'])
+    best_acc = state['acc']
+    start_epoch = state['epoch'] + 1
+    rng_state = state['rng_state']
+    torch.set_rng_state(rng_state)
+else:
+    # assert not os.path.exists(checkpoint_filename)
+    print('==> Building model..')
+
+if not os.path.isdir('results'):
+    os.mkdir('results')
+logname = ('results/log_' + net.__class__.__name__ + '_' + args.name + '_'
+           + str(args.seed) + '.csv')
+
+
+criterion = nn.CrossEntropyLoss()
+
+
+def iteration(inputs, targets):
+    outputs = net(inputs)
+    labels, domain_labels = outputs[0], outputs[1]
+    loss = criterion(labels, targets)
+
+    _, predicted = torch.max(labels.data, 1)
+    inc_total = targets.size(0)
+    inc_correct = predicted.eq(targets.data).cpu().sum().float()
+    return loss, inc_total, inc_correct
+
+
+def train(epoch):
+    print('\nEpoch: %d' % epoch)
+    net.train()
+    train_loss, correct, total = 0., 0, 0
+    reg_loss = 0.
+    for batch_idx, (inputs, targets) in enumerate(trainloader):
+        if use_cuda:
+            inputs, targets = inputs.cuda(), targets.cuda()
+
+        loss, inc_total, inc_correct = iteration(inputs, targets)
+
+        train_loss += loss.item()
+        total += inc_total
+        correct += inc_correct
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Reg: %.5f | Acc: %.3f%% (%d/%d)'
+                     % (train_loss/(batch_idx+1), reg_loss/(batch_idx+1),
+                        100.*correct/total, correct, total))
+    return train_loss/batch_idx, reg_loss/batch_idx, 100.*correct/total
+
+
+def test(epoch):
+    global best_acc
+    net.eval()
+    test_loss, correct, total = 0., 0, 0
+
+    for batch_idx, (inputs, targets) in enumerate(testloader):
+        if use_cuda:
+            inputs, targets = inputs.cuda(), targets.cuda()
+
+        loss, inc_total, inc_correct = iteration(inputs, targets)
+
+        test_loss += loss.item()
+        total += inc_total
+        correct += inc_correct
+
+        progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                     % (test_loss/(batch_idx+1), 100.*correct/total,
+                        correct, total))
+    acc = 100. * correct / total
+    if epoch == args.epoch - 1 or acc > best_acc:
+        checkpoint(acc, epoch)
+    if acc > best_acc:
+        best_acc = acc
+    return test_loss/batch_idx, 100.*correct/total
+
+
+def val(epoch):
+    global best_val_acc
+    net.eval()
+    test_loss, correct, total = 0., 0, 0
+    for batch_idx, (inputs, targets) in enumerate(valloader):
+        if use_cuda:
+            inputs, targets = inputs.cuda(), targets.cuda()
+
+        loss, inc_total, inc_correct = iteration(inputs, targets)
+
+        test_loss += loss.item()
+        total += inc_total
+        correct += inc_correct
+
+        progress_bar(batch_idx, len(valloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                     % (test_loss/(batch_idx+1), 100.*correct/total,
+                        correct, total))
+    acc = 100.*correct/total
+    if epoch == args.epoch - 1 or acc > best_val_acc:
+        checkpoint(acc, epoch)
+    if acc >= best_val_acc:
+        best_val_acc = acc
+        print('temporal best: {:.4f}'.format(best_val_acc))
+    return test_loss/batch_idx, 100.*correct/total
+
+
+def checkpoint(acc, epoch):
+    # Save checkpoint.
+    print('Saving..')
+    state = {
+        'net_state_dict': net.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'acc': acc,
+        'epoch': epoch,
+        'rng_state': torch.get_rng_state()
+    }
+    if not os.path.isdir('checkpoint'):
+        os.mkdir('checkpoint')
+    torch.save(state, checkpoint_filename)
+
+
+def adjust_learning_rate(optimizer, epoch):
+    """decrease the learning rate at 100 and 150 epoch"""
+    lr = args.lr
+    if epoch == 24:
+        lr /= 10
+    if epoch == 34:
+        lr /= 10
+    #if epoch == 24:
+    #    lr = lr/10
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+
+with open(logname, 'a') as logfile:
+    logwriter = csv.writer(logfile, delimiter=',')
+    #logwriter.writerow(['epoch', 'train loss', 'reg loss', 'train acc',
+    #                    'test loss', 'test acc'])
+    logwriter.writerow(target_domain)
+
+for epoch in range(start_epoch, args.epoch):
+    train_loss, reg_loss, train_acc = train(epoch)
+    val_loss, val_acc = val(epoch)
+    test_loss, test_acc = test(epoch)
+    adjust_learning_rate(optimizer, epoch)
+    if val_acc == best_val_acc:
+        with open(logname, 'a') as logfile:
+            logwriter = csv.writer(logfile, delimiter=',')
+            logwriter.writerow([epoch, val_acc, test_acc])
+

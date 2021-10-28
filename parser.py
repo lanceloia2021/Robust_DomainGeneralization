@@ -1,8 +1,10 @@
 import argparse
 
+
 def parser():
     _parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
     _parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
+    _parser.add_argument('--momentum', default=0.9, type=float, help='SGD momentum')
     _parser.add_argument('--resume', '-r', action='store_true',
                         help='resume from checkpoint')
     _parser.add_argument('--model', default=None, type=str,
@@ -17,11 +19,15 @@ def parser():
     _parser.add_argument('--decay', default=1e-4, type=float, help='weight decay')
     _parser.add_argument('--alpha', default=0.2, type=float,
                         help='mixup interpolation coefficient (default: 1)')
-    _parser.add_argument('--targetid', type=int)
-    _parser.add_argument('--labeledid', type=str)
+    _parser.add_argument('--target', type=int)
+    _parser.add_argument('--labeled', type=str)
 
     args = _parser.parse_args()
-    args.labeledid = [int(i) for i in args.labeledid.split(',')]
+    args.labeled = [int(i) for i in args.labeled.split(',')]
+
+    assert args.labeled is not None
+    assert args.target is not None
+
     return args
 
 

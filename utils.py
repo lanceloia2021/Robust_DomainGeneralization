@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import random
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -14,6 +15,17 @@ import torch.nn.init as init
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import numpy as np
+
+
+def construct_domains(domains, labeled: list, target: int):
+    unlabeled_domain = deepcopy(domains)
+    labeled_domain = []
+    for i in labeled:
+        labeled_domain.append(domains[i])
+        unlabeled_domain.remove(domains[i])
+    unlabeled_domain.remove(domains[target])
+    target_domain = [domains[target]]
+    return labeled_domain, unlabeled_domain, target_domain
 
 
 def set_randseed(seed):
